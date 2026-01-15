@@ -3,7 +3,7 @@ import stripe
 from django.shortcuts import render
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
-from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
@@ -12,6 +12,7 @@ from .models import Product, Order, OrderItem
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
+@ensure_csrf_cookie
 def index(request):
     """
     Display the home page with product list and order history.
