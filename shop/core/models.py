@@ -7,14 +7,13 @@ class Product(models.Model):
     
     Fields:
     - name: Product name
-    - description: Detailed description of the product
-    - price: Price in cents (to avoid floating point issues)
-    - quantity: Available quantity in stock
+    - price_cents: Price in cents (to avoid floating point issues)
     """
     name = models.CharField(max_length=255)
-    description = models.TextField()
-    price = models.IntegerField()  # Price in cents
-    quantity = models.IntegerField()
+    price_cents = models.IntegerField()  # Price in cents
+    
+    class Meta:
+        ordering = ['id']
     
     def __str__(self):
         return self.name
@@ -25,13 +24,28 @@ class Order(models.Model):
     Order model representing a customer purchase.
     
     Fields:
-    - stripe_session_id: Stripe checkout session ID
-    - status: Order status (pending, completed, cancelled)
+    - session_id: Stripe checkout session ID (UNIQUE)
+    - status: Order status (PENDING, PAID, FAILED)
+    - total_cents: Total order amount in cents
     - created_at: Order creation timestamp
     """
-    stripe_session_id = models.CharField(max_length=255, unique=True)
-    status = models.CharField(max_length=50, default='pending')
+    STATUS_PENDING = 'PENDING'
+    STATUS_PAID = 'PAID'
+    STATUS_FAILED = 'FAILED'
+    
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_PAID, 'Paid'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+    
+    session_id = models.CharField(max_length=255, unique=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    total_cents = models.IntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
     
     def __str__(self):
         return f"Order {self.id} - {self.status}"
@@ -45,12 +59,13 @@ class OrderItem(models.Model):
     - order: Foreign key to Order
     - product: Foreign key to Product
     - quantity: Quantity of the product ordered
-    - price: Price of the product at time of order (in cents)
     """
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(Product, on_delete=models.PROTECT)
     quantity = models.IntegerField()
-    price = models.IntegerField()  # Price in cents at time of order
+    
+    class Meta:
+        unique_together = ['order', 'product']
     
     def __str__(self):
         return f"{self.product.name} x {self.quantity}"

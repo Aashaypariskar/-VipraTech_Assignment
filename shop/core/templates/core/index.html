@@ -4,6 +4,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Shop</title>
+    <script src="https://js.stripe.com/v3/"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .product-card { border: 1px solid #ccc; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .product-card h3 { margin-top: 0; }
+        input[type="number"] { width: 60px; padding: 5px; }
+        button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        .order-card { border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; background-color: #f9f9f9; }
+        .order-card h3 { margin-top: 0; color: #333; }
+        .order-card ul { margin: 10px 0; }
+        .order-card li { margin: 5px 0; }
+        #cart-total { font-size: 18px; font-weight: bold; margin: 10px 0; }
+        .cart-item { display: flex; justify-content: space-between; padding: 10px; border-bottom: 1px solid #eee; }
+    </style>
 </head>
 <body>
     <h1>Welcome to the Shop</h1>
@@ -11,54 +26,172 @@
     <!-- Product list section -->
     <section id="products">
         <h2>Products</h2>
-        <!-- TODO: Render product list with quantity inputs and buy button -->
         {% for product in products %}
             <div class="product-card">
                 <h3>{{ product.name }}</h3>
-                <p>{{ product.description }}</p>
-                <p>Price: {{ product.price }}</p>
-                <p>Available: {{ product.quantity }}</p>
-                <input type="number" name="quantity" min="1" max="{{ product.quantity }}" value="1">
-                <button class="add-to-cart" data-product-id="{{ product.id }}">Add to Cart</button>
+                <p><strong>Price:</strong> ${{ product.price_cents|floatformat:2|add:0 }}</p>
+                <input type="number" id="qty-{{ product.id }}" class="quantity-input" data-product-id="{{ product.id }}" data-product-name="{{ product.name }}" data-price-cents="{{ product.price_cents }}" min="1" value="1">
+                <button onclick="addToCart({{ product.id }}, '{{ product.name }}', {{ product.price_cents }})">Add to Cart</button>
             </div>
         {% empty %}
             <p>No products available.</p>
         {% endfor %}
     </section>
     
-    <!-- Cart and checkout section -->
+    <!-- Cart section -->
     <section id="cart">
         <h2>Cart</h2>
-        <!-- TODO: Display cart items with total price -->
-        <div id="cart-items">
-            <!-- Cart items will be rendered here -->
-        </div>
-        <button id="checkout-button" style="display: none;">Buy Now</button>
+        <div id="cart-items"></div>
+        <div id="cart-total">Total: $0.00</div>
+        <button id="checkout-button" onclick="checkout()" style="display: none;">Buy Now</button>
     </section>
     
     <!-- Orders history section -->
     <section id="orders">
         <h2>My Orders</h2>
-        <!-- TODO: Render order history with status -->
-        {% for order in orders %}
-            <div class="order-card">
-                <h3>Order #{{ order.id }}</h3>
-                <p>Status: {{ order.status }}</p>
-                <p>Created: {{ order.created_at }}</p>
-                <ul>
-                    {% for item in order.items.all %}
-                        <li>{{ item.product.name }} x {{ item.quantity }} - {{ item.price }}</li>
-                    {% endfor %}
-                </ul>
-            </div>
-        {% empty %}
+        {% if orders %}
+            {% for order in orders %}
+                <div class="order-card">
+                    <h3>Order #{{ order.id }}</h3>
+                    <p><strong>Status:</strong> {{ order.status }}</p>
+                    <p><strong>Total:</strong> ${{ order.total_cents|floatformat:2|add:0 }}</p>
+                    <p><strong>Created:</strong> {{ order.created_at|date:"Y-m-d H:i" }}</p>
+                    <h4>Items:</h4>
+                    <ul>
+                        {% for item in order.items.all %}
+                            <li>{{ item.product.name }} × {{ item.quantity }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endfor %}
+        {% else %}
             <p>No orders yet.</p>
-        {% endfor %}
+        {% endif %}
     </section>
     
     <script>
-        // TODO: Implement cart management logic
-        // TODO: Implement Stripe checkout session creation
+        const stripe = Stripe('{{ stripe_public_key }}');
+        let cart = {};
+        
+        function addToCart(productId, productName, priceCents) {
+            const qtyInput = document.getElementById(`qty-${productId}`);
+            const qty = parseInt(qtyInput.value);
+            
+            if (qty <= 0) {
+                alert('Please enter a valid quantity');
+                return;
+            }
+            
+            if (cart[productId]) {
+                cart[productId].quantity += qty;
+            } else {
+                cart[productId] = {
+                    name: productName,
+                    price_cents: priceCents,
+                    quantity: qty,
+                };
+            }
+            
+            qtyInput.value = 1;
+            renderCart();
+        }
+        
+        function renderCart() {
+            const cartItemsDiv = document.getElementById('cart-items');
+            const checkoutButton = document.getElementById('checkout-button');
+            const cartTotalDiv = document.getElementById('cart-total');
+            
+            cartItemsDiv.innerHTML = '';
+            let totalCents = 0;
+            let itemCount = 0;
+            
+            for (const [productId, item] of Object.entries(cart)) {
+                const itemTotal = item.price_cents * item.quantity;
+                totalCents += itemTotal;
+                itemCount++;
+                
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'cart-item';
+                itemDiv.innerHTML = `
+                    <span>${item.name} × ${item.quantity}</span>
+                    <span>$${(itemTotal / 100).toFixed(2)}
+                    <button onclick="removeFromCart(${productId})" style="margin-left: 10px; padding: 5px 10px; background-color: #dc3545;">Remove</button>
+                    </span>
+                `;
+                cartItemsDiv.appendChild(itemDiv);
+            }
+            
+            if (itemCount > 0) {
+                checkoutButton.style.display = 'block';
+                cartTotalDiv.textContent = `Total: $${(totalCents / 100).toFixed(2)}`;
+            } else {
+                checkoutButton.style.display = 'none';
+                cartTotalDiv.textContent = 'Total: $0.00';
+            }
+        }
+        
+        function removeFromCart(productId) {
+            delete cart[productId];
+            renderCart();
+        }
+        
+        async function checkout() {
+            const checkoutButton = document.getElementById('checkout-button');
+            checkoutButton.disabled = true;
+            checkoutButton.textContent = 'Processing...';
+            
+            const items = Object.entries(cart).map(([productId, item]) => ({
+                product_id: parseInt(productId),
+                quantity: item.quantity,
+            }));
+            
+            try {
+                const response = await fetch('/create-checkout-session/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken'),
+                    },
+                    body: JSON.stringify({ items }),
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    alert(`Error: ${errorData.error}`);
+                    checkoutButton.disabled = false;
+                    checkoutButton.textContent = 'Buy Now';
+                    return;
+                }
+                
+                const { sessionId } = await response.json();
+                const { error } = await stripe.redirectToCheckout({ sessionId });
+                
+                if (error) {
+                    alert(`Error: ${error.message}`);
+                    checkoutButton.disabled = false;
+                    checkoutButton.textContent = 'Buy Now';
+                }
+            } catch (err) {
+                alert(`Error: ${err.message}`);
+                checkoutButton.disabled = false;
+                checkoutButton.textContent = 'Buy Now';
+            }
+        }
+        
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                const cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === name + '=') {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
     </script>
 </body>
 </html>

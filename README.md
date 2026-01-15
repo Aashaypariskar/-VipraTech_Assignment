@@ -1,2 +1,185 @@
-#  VipraTech_Assignment
+#  VipraTech_Assignment - Stripe Checkout Django Shop
+
+A production-ready Django e-commerce application with Stripe Checkout integration. The app allows customers to browse products, add them to a cart, and securely purchase using Stripe's Checkout Session API.
+
+## Assumptions
+
+1. **Environment Setup**: Stripe API keys (publishable and secret) are configured as environment variables (`STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`).
+2. **Currency**: All prices are stored in cents (USD) to avoid floating-point precision issues.
+3. **User Sessions**: Orders are tracked by Stripe session ID, not by authenticated user (stateless checkout).
+4. **Payment State**: Payment state is *only* updated via Stripe webhooks, never via user redirects.
+5. **Fixed Products**: The shop displays 3 fixed products seeded via management command.
+6. **Stripe Checkout Mode**: Using Stripe's Checkout Session API in `payment` mode (not Payment Intents).
+
+## Flow & Architecture
+
+### Why Stripe Checkout vs. Payment Intents?
+
+**Chosen: Stripe Checkout Session API**
+
+**Rationale:**
+- Simpler, hosted UI reduces PCI compliance burden
+- Built-in idempotency and duplicate handling at Stripe's edge
+- Automatic handling of 3D Secure and payment method variety
+- Lower operational overhead for a small shop
+- Webhook-based confirmation is more reliable than redirect-based state changes
+
+Payment Intents would require:
+- Custom UI/form handling
+- Manual PCI compliance
+- More complex error recovery
+
+For a production shop, Checkout is the safer, lower-risk choice.
+
+### Request Flow
+
+```
+Customer              Server              Stripe
+   |                   |                   |
+   |---(1) Add to cart--|                   |
+   |                   |                   |
+   |---(2) Checkout----|                   |
+   |                   |---(3) Create Session----->|
+   |                   |<---Session ID------|
+   |<---(4) Redirect---|                   |
+   |---(5) Pay @ Stripe-------->|          |
+   |                   |<--Webhook (session.completed)---|
+   |                   |---(6) Mark PAID---|
+   |<---(7) Success---|                   |
+```
+
+1. Customer adds products to cart (client-side cart management)
+2. Clicks "Buy Now" button
+3. Frontend POSTs `/create-checkout-session/` with cart items
+4. Server validates items, creates Order (PENDING), creates OrderItems, calls Stripe API to create session
+5. Server returns session ID
+6. Frontend redirects to Stripe Checkout
+7. Customer pays at Stripe
+8. Stripe sends `checkout.session.completed` webhook
+9. Server verifies signature, finds Order by session_id, marks as PAID
+10. Customer returns to home page, sees PAID order in "My Orders" section
+
+## How Duplicate Charges Are Prevented
+
+1. **Unique Session ID**: Each Stripe session has a globally unique ID. The `Order.session_id` field has a `unique=True` constraint, preventing database-level duplicates.
+
+2. **Idempotent Webhook Handling**:
+   - Webhook handler checks `if order.status == Order.STATUS_PAID: return 200`
+   - Stripe retries webhooks if no 200 response; we safely return 200 without re-processing
+   - No double charge if webhook is replayed
+
+3. **No Redirect-Based State Changes**:
+   - `success_url` redirects to home page; it does NOT mark order as PAID
+   - Only the webhook handler (with verified Stripe signature) updates status
+   - Prevents race conditions between success redirect and webhook arrival
+
+4. **Database Transactions** (implicit in Django ORM):
+   - Status update is atomic: one query, one write
+   - No window for concurrent modifications
+
+## Setup & Run
+
+### Prerequisites
+
+- Python 3.8+
+- Django 4.2+
+- Stripe API account (test mode keys)
+- `pip` package manager
+
+### Installation
+
+```bash
+# 1. Clone the repository
+cd d:\-VipraTech_Assignment\shop
+
+# 2. Create a virtual environment
+python -m venv venv
+venv\Scripts\activate  # On Windows
+
+# 3. Install dependencies
+pip install django stripe
+
+# 4. Configure environment variables
+# Create a .env file or set OS environment variables:
+# STRIPE_PUBLISHABLE_KEY=pk_test_...
+# STRIPE_SECRET_KEY=sk_test_...
+# STRIPE_WEBHOOK_SECRET=whsec_...
+
+# 5. Run migrations
+python manage.py migrate
+
+# 6. Seed products
+python manage.py seed_products
+
+# 7. Start development server
+python manage.py runserver
+```
+
+### Testing the App
+
+1. Open http://localhost:8000/
+2. See 3 products: Laptop ($999.99), Mouse ($29.99), Keyboard ($79.99)
+3. Add items to cart, click "Buy Now"
+4. Enter Stripe test card: 4242 4242 4242 4242 (exp: 12/34, CVC: 123)
+5. On success redirect, check "My Orders" section (shows only PAID orders)
+
+### Webhook Configuration
+
+For local testing with Stripe webhooks:
+
+```bash
+# Install Stripe CLI
+# https://stripe.com/docs/stripe-cli
+
+stripe listen --forward-to localhost:8000/stripe/webhook/
+# Get webhook signing secret from CLI output
+export STRIPE_WEBHOOK_SECRET=whsec_...
+
+python manage.py runserver
+```
+
+## Code Quality Notes
+
+### Design Principles
+
+1. **Explicit over Implicit**: All status values are class constants (`Order.STATUS_PAID`), not magic strings.
+2. **Safety-First**: Webhook signature verification is mandatory; no shortcuts.
+3. **Separation of Concerns**:
+   - `views.index`: Fetch and display data
+   - `views.create_checkout_session`: Business logic, Stripe API calls, DB writes
+   - `views.stripe_webhook`: Webhook handling, idempotency checks
+4. **Error Handling**: Every external API call (Stripe) is wrapped in try-except with user-friendly error messages.
+5. **Stateless Design**: No session state; Order is the source of truth.
+
+### Code Structure
+
+- **Models** ([core/models.py](core/models.py)): 3 models (Product, Order, OrderItem) with clear docstrings.
+- **Views** ([core/views.py](core/views.py)): 3 pure functions (no classes), ~170 LOC, well-commented.
+- **URLs** ([core/urls.py](core/urls.py)): Named routes for reverse URL generation.
+- **Template** ([core/templates/core/index.html](core/templates/core/index.html)): Clean HTML5, inline Stripe.js, client-side cart with basic UX polish.
+- **Management Command** ([core/management/commands/seed_products.py](core/management/commands/seed_products.py)): Idempotent seeding, bulk insert.
+
+### Security
+
+- CSRF protection enabled (default Django; exempted only for webhook)
+- Stripe signature verification on all webhooks
+- No hardcoded secrets; environment variables only
+- Price validation server-side (client cart is for UX only)
+
+### Performance
+
+- Database queries are optimized (`prefetch_related` for order items)
+- No N+1 queries in views
+- Stripe session creation is the only I/O; is O(1) per cart
+
+### Testing
+
+Manual testing sufficient for MVP. For production, add:
+- Unit tests for `create_checkout_session` (mock Stripe)
+- Unit tests for webhook handler (idempotency, signature verification)
+- Integration tests (full flow with Stripe test keys)
+
+## Time Spent
+
+**Estimated:** [PLACEHOLDER - to be filled with actual implementation time]
 
