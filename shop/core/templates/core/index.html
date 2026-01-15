@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shop</title>
+</head>
+<body>
+    <h1>Welcome to the Shop</h1>
+    
+    <!-- Product list section -->
+    <section id="products">
+        <h2>Products</h2>
+        <!-- TODO: Render product list with quantity inputs and buy button -->
+        {% for product in products %}
+            <div class="product-card">
+                <h3>{{ product.name }}</h3>
+                <p>{{ product.description }}</p>
+                <p>Price: {{ product.price }}</p>
+                <p>Available: {{ product.quantity }}</p>
+                <input type="number" name="quantity" min="1" max="{{ product.quantity }}" value="1">
+                <button class="add-to-cart" data-product-id="{{ product.id }}">Add to Cart</button>
+            </div>
+        {% empty %}
+            <p>No products available.</p>
+        {% endfor %}
+    </section>
+    
+    <!-- Cart and checkout section -->
+    <section id="cart">
+        <h2>Cart</h2>
+        <!-- TODO: Display cart items with total price -->
+        <div id="cart-items">
+            <!-- Cart items will be rendered here -->
+        </div>
+        <button id="checkout-button" style="display: none;">Buy Now</button>
+    </section>
+    
+    <!-- Orders history section -->
+    <section id="orders">
+        <h2>My Orders</h2>
+        <!-- TODO: Render order history with status -->
+        {% for order in orders %}
+            <div class="order-card">
+                <h3>Order #{{ order.id }}</h3>
+                <p>Status: {{ order.status }}</p>
+                <p>Created: {{ order.created_at }}</p>
+                <ul>
+                    {% for item in order.items.all %}
+                        <li>{{ item.product.name }} x {{ item.quantity }} - {{ item.price }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        {% empty %}
+            <p>No orders yet.</p>
+        {% endfor %}
+    </section>
+    
+    <script>
+        // TODO: Implement cart management logic
+        // TODO: Implement Stripe checkout session creation
+    </script>
+</body>
+</html>
