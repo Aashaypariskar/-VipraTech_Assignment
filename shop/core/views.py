@@ -9,7 +9,11 @@ from django.core.exceptions import ValidationError
 
 from .models import Product, Order, OrderItem
 
-stripe.api_key = settings.STRIPE_SECRET_KEY
+# Initialize Stripe only if keys are configured
+if settings.STRIPE_SECRET_KEY and not settings.STRIPE_DEMO_MODE:
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+else:
+    stripe.api_key = None
 
 
 @ensure_csrf_cookie
@@ -24,6 +28,18 @@ def index(request):
     """
     products = Product.objects.all()
     paid_orders = Order.objects.filter(status=Order.STATUS_PAID).prefetch_related('items__product')
+    
+    # Check if Stripe is properly configured
+    stripe_configured = bool(settings.STRIPE_PUBLISHABLE_KEY and settings.STRIPE_SECRET_KEY)
+    demo_mode = settings.STRIPE_DEMO_MODE
+    
+    return render(request, 'core/index.html', {
+        'products': products,
+        'orders': paid_orders,
+        'stripe_public_key': settings.STRIPE_PUBLISHABLE_KEY if stripe_configured else 'pk_demo_mode',
+        'stripe_configured': stripe_configured,
+        'demo_mode': demo_mode,
+    })
     
     return render(request, 'core/index.html', {
         'products': products,
@@ -41,7 +57,7 @@ def create_checkout_session(request):
     1. Parse cart items from request body (JSON)
     2. Validate products exist and quantities are positive
     3. Calculate total in cents
-    4. Create Stripe checkout session (test mode)
+    4. Create Stripe checkout session (test mode) OR demo session
     5. Create Order with status=PENDING and session_id from Stripe
     6. Create OrderItem rows for each product
     7. Return session ID (frontend redirects to Stripe)
@@ -97,14 +113,40 @@ def create_checkout_session(request):
                 'quantity': quantity,
             })
         
-        # Create Stripe checkout session
-        session = stripe.checkout.Session.create(
-            payment_method_types=['card'],
-            line_items=line_items,
-            mode='payment',
-            success_url=request.build_absolute_uri('/'),
-            cancel_url=request.build_absolute_uri('/'),
-        )
+        # Check if Stripe is configured
+        stripe_configured = bool(settings.STRIPE_SECRET_KEY and settings.STRIPE_PUBLISHABLE_KEY)
+        
+        if settings.STRIPE_DEMO_MODE or not stripe_configured:
+            # Demo mode: create order with PENDING status (auto-complete for demo)
+            order = Order.objects.create(
+                session_id=f'demo_session_{Order.objects.count() + 1}',
+                status=Order.STATUS_PAID,  # Auto-mark as paid in demo mode
+                total_cents=total_cents,
+            )
+            
+            # Create OrderItems
+            for item_data in order_items_data:
+                OrderItem.objects.create(
+                    order=order,
+                    product=item_data['product'],
+                    quantity=item_data['quantity'],
+                )
+            
+            return JsonResponse({'sessionId': order.session_id, 'demo': True})
+        
+        # Real Stripe mode: Create Stripe checkout session
+        try:
+            session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                line_items=line_items,
+                mode='payment',
+                success_url=request.build_absolute_uri('/'),
+                cancel_url=request.build_absolute_uri('/'),
+            )
+        except stripe.error.AuthenticationError:
+            return JsonResponse({'error': 'Stripe API Key is invalid. Please configure STRIPE_SECRET_KEY environment variable.'}, status=500)
+        except stripe.error.StripeError as e:
+            return JsonResponse({'error': f'Stripe error: {str(e)}'}, status=500)
         
         # Create Order with PENDING status
         order = Order.objects.create(

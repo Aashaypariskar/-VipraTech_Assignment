@@ -23,6 +23,14 @@
 <body>
     <h1>Welcome to the Shop</h1>
     
+    {% if demo_mode %}
+    <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; margin-bottom: 20px; border-radius: 5px;">
+        <strong>⚠️ Demo Mode Active</strong>
+        <p>Stripe API keys are not configured. Running in demo mode - orders will be automatically completed without payment processing.</p>
+        <p><small>To enable real Stripe checkout, set environment variables: STRIPE_PUBLISHABLE_KEY, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET</small></p>
+    </div>
+    {% endif %}
+    
     <!-- Product list section -->
     <section id="products">
         <h2>Products</h2>
@@ -71,8 +79,9 @@
     </section>
     
     <script>
-        const stripe = Stripe('{{ stripe_public_key }}');
+        const stripe = {% if stripe_configured %}Stripe('{{ stripe_public_key }}'){% else %}null{% endif %};
         let cart = {};
+        const demoMode = {{ demo_mode|lower }};
         
         function addToCart(productId, productName, priceCents) {
             const qtyInput = document.getElementById(`qty-${productId}`);
@@ -124,6 +133,7 @@
             
             if (itemCount > 0) {
                 checkoutButton.style.display = 'block';
+                checkoutButton.textContent = demoMode ? 'Complete Order (Demo)' : 'Buy Now';
                 cartTotalDiv.textContent = `Total: $${(totalCents / 100).toFixed(2)}`;
             } else {
                 checkoutButton.style.display = 'none';
@@ -139,7 +149,7 @@
         async function checkout() {
             const checkoutButton = document.getElementById('checkout-button');
             checkoutButton.disabled = true;
-            checkoutButton.textContent = 'Processing...';
+            checkoutButton.textContent = demoMode ? 'Completing Order...' : 'Processing...';
             
             const items = Object.entries(cart).map(([productId, item]) => ({
                 product_id: parseInt(productId),
@@ -163,11 +173,23 @@
                     const errorData = await response.json();
                     alert(`Error: ${errorData.error}`);
                     checkoutButton.disabled = false;
-                    checkoutButton.textContent = 'Buy Now';
+                    checkoutButton.textContent = demoMode ? 'Complete Order (Demo)' : 'Buy Now';
                     return;
                 }
                 
-                const { sessionId } = await response.json();
+                const data = await response.json();
+                
+                if (demoMode || data.demo) {
+                    // Demo mode: auto-complete the order
+                    alert('Order completed successfully! (Demo Mode)\n\nThe order has been added to "My Orders" section.');
+                    cart = {};
+                    renderCart();
+                    setTimeout(() => location.reload(), 1500);
+                    return;
+                }
+                
+                // Real Stripe mode
+                const { sessionId } = data;
                 const { error } = await stripe.redirectToCheckout({ sessionId });
                 
                 if (error) {
@@ -178,7 +200,7 @@
             } catch (err) {
                 alert(`Error: ${err.message}`);
                 checkoutButton.disabled = false;
-                checkoutButton.textContent = 'Buy Now';
+                checkoutButton.textContent = demoMode ? 'Complete Order (Demo)' : 'Buy Now';
             }
         }
         
