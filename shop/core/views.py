@@ -1,5 +1,6 @@
 import json
 import stripe
+import logging
 from django.shortcuts import render
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
@@ -9,11 +10,15 @@ from django.core.exceptions import ValidationError
 
 from .models import Product, Order, OrderItem
 
-# Initialize Stripe only if keys are configured
-if settings.STRIPE_SECRET_KEY and not settings.STRIPE_DEMO_MODE:
+logger = logging.getLogger(__name__)
+
+# Initialize Stripe API key (only if in real mode with key present)
+if settings.STRIPE_KEY_PRESENT and not settings.STRIPE_DEMO_MODE:
     stripe.api_key = settings.STRIPE_SECRET_KEY
-else:
+    logger.info('Stripe API key initialized for real mode.')
+elif settings.STRIPE_DEMO_MODE or not settings.STRIPE_KEY_PRESENT:
     stripe.api_key = None
+    logger.info('Running in Demo mode. Stripe API not initialized.')
 
 
 @ensure_csrf_cookie
@@ -25,12 +30,13 @@ def index(request):
     1. Fetch all products from database
     2. Fetch PAID orders only
     3. Render index.html with products and orders
+    4. Determine Stripe mode based on key presence
     """
     products = Product.objects.all()
     paid_orders = Order.objects.filter(status=Order.STATUS_PAID).prefetch_related('items__product')
     
-    # Check if Stripe is properly configured
-    stripe_configured = bool(settings.STRIPE_PUBLISHABLE_KEY and settings.STRIPE_SECRET_KEY)
+    # Stripe mode is determined by key presence
+    stripe_configured = settings.STRIPE_KEY_PRESENT
     demo_mode = settings.STRIPE_DEMO_MODE
     
     return render(request, 'core/index.html', {
@@ -39,12 +45,6 @@ def index(request):
         'stripe_public_key': settings.STRIPE_PUBLISHABLE_KEY if stripe_configured else 'pk_demo_mode',
         'stripe_configured': stripe_configured,
         'demo_mode': demo_mode,
-    })
-    
-    return render(request, 'core/index.html', {
-        'products': products,
-        'orders': paid_orders,
-        'stripe_public_key': settings.STRIPE_PUBLISHABLE_KEY,
     })
 
 
@@ -73,7 +73,7 @@ def create_checkout_session(request):
         if not items:
             return JsonResponse({'error': 'No items in cart'}, status=400)
         
-        # Validate and collect line items for Stripe
+        # Validate and collect line items for Stripe/demo
         line_items = []
         total_cents = 0
         order_items_data = []
@@ -96,7 +96,7 @@ def create_checkout_session(request):
             item_total = product.price_cents * quantity
             total_cents += item_total
             
-            # Add to Stripe line items
+            # Add to line items (for both Stripe and demo)
             line_items.append({
                 'price_data': {
                     'currency': 'usd',
@@ -113,11 +113,9 @@ def create_checkout_session(request):
                 'quantity': quantity,
             })
         
-        # Check if Stripe is configured
-        stripe_configured = bool(settings.STRIPE_SECRET_KEY and settings.STRIPE_PUBLISHABLE_KEY)
-        
-        if settings.STRIPE_DEMO_MODE or not stripe_configured:
-            # Demo mode: create order with PENDING status (auto-complete for demo)
+        # Check if Stripe is configured based on key presence flag from settings
+        if not settings.STRIPE_KEY_PRESENT or settings.STRIPE_DEMO_MODE:
+            # Demo mode: create order with PAID status (auto-complete for demo)
             order = Order.objects.create(
                 session_id=f'demo_session_{Order.objects.count() + 1}',
                 status=Order.STATUS_PAID,  # Auto-mark as paid in demo mode
@@ -134,7 +132,10 @@ def create_checkout_session(request):
             
             return JsonResponse({'sessionId': order.session_id, 'demo': True})
         
-        # Real Stripe mode: Create Stripe checkout session
+        # Real Stripe mode: Initialize Stripe API with secret key
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        
+        # Create Stripe checkout session
         try:
             session = stripe.checkout.Session.create(
                 payment_method_types=['card'],

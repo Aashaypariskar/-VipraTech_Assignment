@@ -132,10 +132,25 @@ CSRF_COOKIE_SAMESITE = 'Lax'
 # Stripe Configuration
 # Environment variables: STRIPE_PUBLISHABLE_KEY, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 import os
+import logging
 
-STRIPE_PUBLISHABLE_KEY = os.getenv('STRIPE_PUBLISHABLE_KEY', '')
-STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY', '')
-STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', '')
+logger = logging.getLogger(__name__)
 
-# Demo mode: Set to True to test without Stripe keys
-STRIPE_DEMO_MODE = os.getenv('STRIPE_DEMO_MODE', 'True').lower() == 'true'
+STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY', '')
+STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY', '')
+STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
+
+# Auto-detect: if SECRET_KEY exists, use real mode; otherwise use demo mode
+STRIPE_KEY_PRESENT = bool(STRIPE_SECRET_KEY and STRIPE_PUBLISHABLE_KEY)
+STRIPE_DEMO_MODE = not STRIPE_KEY_PRESENT  # Default: Demo mode if keys missing, Real mode if keys present
+
+# Allow explicit override via environment variable (case-insensitive)
+if 'STRIPE_DEMO_MODE' in os.environ:
+    STRIPE_DEMO_MODE = os.environ.get('STRIPE_DEMO_MODE', '').lower() in ('true', '1', 'yes')
+
+# Startup logging (no sensitive data)
+if STRIPE_KEY_PRESENT:
+    logger.info('✓ Stripe keys detected. Real Stripe mode ENABLED.')
+else:
+    logger.info('⚠ Stripe keys not detected. Demo mode ENABLED.')
+    logger.info('  To enable real Stripe, set STRIPE_PUBLISHABLE_KEY and STRIPE_SECRET_KEY environment variables.')

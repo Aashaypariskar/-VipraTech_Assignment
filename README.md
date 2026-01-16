@@ -4,6 +4,8 @@ A production-ready Django e-commerce application with Stripe Checkout integratio
 
 ## Assumptions
 
+**⚠️ IMPORTANT FOR WINDOWS USERS:** See [WINDOWS_STRIPE_SETUP.md](WINDOWS_STRIPE_SETUP.md) for the correct procedure to set Stripe keys. TL;DR: Run `setx`, then open a **NEW PowerShell window**, then verify and restart Django.
+
 1. **Environment Setup**: Stripe API keys (publishable and secret) are configured as environment variables (`STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`).
 2. **Currency**: All prices are stored in cents (USD) to avoid floating-point precision issues.
 3. **User Sessions**: Orders are tracked by Stripe session ID, not by authenticated user (stateless checkout).
@@ -47,6 +49,35 @@ Customer              Server              Stripe
    |                   |---(6) Mark PAID---|
    |<---(7) Success---|                   |
 ```
+
+### Demo Mode (Default - No Keys Required)
+
+If Stripe keys are not set, the app automatically runs in **demo mode**:
+- ✅ Checkout button completes orders instantly (no Stripe API call)
+- ✅ Orders appear in "My Orders" section immediately  
+- ✅ Perfect for testing UI/UX without Stripe
+- ✅ Database still records all transactions
+
+**When to use demo mode:**
+- Local development and testing
+- Presentations and demos
+- Testing the checkout flow without Stripe account
+
+### Real Stripe Mode (When Keys Are Set)
+
+When you set `STRIPE_PUBLISHABLE_KEY` and `STRIPE_SECRET_KEY`, the app automatically switches to real mode:
+- 💳 Checkout redirects to Stripe's hosted checkout
+- 💳 Real payment processing
+- 💳 Webhook signature verification
+- 💳 Orders only marked PAID after successful payment
+
+**How it works:**
+1. App starts and reads environment variables
+2. `settings.py` detects both keys are present
+3. `STRIPE_KEY_PRESENT = True` → `STRIPE_DEMO_MODE = False`
+4. Startup logs show: `✓ Stripe keys detected. Real Stripe mode ENABLED.`
+5. Checkout button now uses real Stripe Checkout Session API
+6. Only webhooks can mark orders as PAID (not manual redirects)
 
 1. Customer adds products to cart (client-side cart management)
 2. Clicks "Buy Now" button
