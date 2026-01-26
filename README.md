@@ -38,16 +38,16 @@ For a production shop, Checkout is the safer, lower-risk choice.
 ```
 Customer              Server              Stripe
    |                   |                   |
-   |---(1) Add to cart--|                   |
+   |---(1) Enter quantities--------------->|
    |                   |                   |
-   |---(2) Checkout----|                   |
-   |                   |---(3) Create Session----->|
+   |---(2) Click Buy---|                   |
+   |                   |---(3) Create Checkout Session----->|
    |                   |<---Session ID------|
-   |<---(4) Redirect---|                   |
+   |<---(4) Redirect to Stripe Checkout---|
    |---(5) Pay @ Stripe-------->|          |
-   |                   |<--Webhook (session.completed)---|
-   |                   |---(6) Mark PAID---|
-   |<---(7) Success---|                   |
+   |                   |<--Webhook (checkout.session.completed)---|
+   |                   |---(6) Mark Order PAID (idempotent)---|
+   |<---(7) Refresh page, see PAID order---|
 ```
 
 ### Demo Mode (Default - No Keys Required)
@@ -80,15 +80,15 @@ When you set `STRIPE_PUBLISHABLE_KEY` and `STRIPE_SECRET_KEY`, the app automatic
 6. Only webhooks can mark orders as PAID (not manual redirects)
 
 1. Customer adds products to cart (client-side cart management)
-2. Clicks "Buy Now" button
-3. Frontend POSTs `/create-checkout-session/` with cart items
-4. Server validates items, creates Order (PENDING), creates OrderItems, calls Stripe API to create session
-5. Server returns session ID
-6. Frontend redirects to Stripe Checkout
+2. Clicks "Buy" button
+3. Frontend POSTs `/create-checkout-session/` with `{items: [{product_id, quantity}]}` (only the 3 fixed products)
+4. Server validates items, computes total, calls Stripe to create a Checkout Session
+5. Server performs an **atomic DB transaction** creating `Order(status=PENDING, session_id=<stripe_session_id>, total_cents=...)` and `OrderItem` rows
+6. Frontend redirects to Stripe Checkout using the session id
 7. Customer pays at Stripe
 8. Stripe sends `checkout.session.completed` webhook
-9. Server verifies signature, finds Order by session_id, marks as PAID
-10. Customer returns to home page, sees PAID order in "My Orders" section
+9. Server verifies signature, locks the `Order` row (`select_for_update()`), and marks it `PAID` if not already paid
+10. Customer refreshes/returns and sees the PAID order in "My Orders"
 
 ## How Duplicate Charges Are Prevented
 
@@ -104,9 +104,9 @@ When you set `STRIPE_PUBLISHABLE_KEY` and `STRIPE_SECRET_KEY`, the app automatic
    - Only the webhook handler (with verified Stripe signature) updates status
    - Prevents race conditions between success redirect and webhook arrival
 
-4. **Database Transactions** (implicit in Django ORM):
-   - Status update is atomic: one query, one write
-   - No window for concurrent modifications
+4. **Atomic Database Writes**:
+   - Order + OrderItems are created inside `transaction.atomic()` so we don’t end up with partial rows
+   - Webhook uses `transaction.atomic()` + `select_for_update()` to avoid concurrent updates producing broken states
 
 ## Setup & Run
 
