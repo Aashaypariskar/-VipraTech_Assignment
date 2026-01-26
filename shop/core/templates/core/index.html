@@ -6,7 +6,8 @@
     <title>Shop</title>
     <script src="https://js.stripe.com/v3/"></script>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
+        body { font-family: Arial, sans-serif; margin: 20px; background: #ffffff; color: #111111; }
+        p { color: #111111; }
         .product-card { border: 1px solid #ccc; padding: 15px; margin: 10px 0; border-radius: 5px; }
         .product-card h3 { margin-top: 0; }
         input[type="number"] { width: 60px; padding: 5px; }
@@ -14,32 +15,38 @@
         button:disabled { background-color: #ccc; cursor: not-allowed; }
         .order-card { border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; background-color: #f9f9f9; }
         .order-card h3 { margin-top: 0; color: #333; }
+        .order-card p, .order-card li { color: #111111; }
         .order-card ul { margin: 10px 0; }
         .order-card li { margin: 5px 0; }
         #cart-total { font-size: 18px; font-weight: bold; margin: 10px 0; }
         .qty-row { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
         .muted { color: #666; font-size: 12px; }
+
+        .alert { padding: 15px; margin-bottom: 20px; border-radius: 5px; color: #111111; }
+        .alert p { margin: 8px 0 0 0; color: #111111; }
+        .alert-success { background-color: #e7f5ff; border: 1px solid #74c0fc; }
+        .alert-warn { background-color: #fff3cd; border: 1px solid #ffc107; }
     </style>
 </head>
 <body>
     <h1>Welcome to the Shop</h1>
     
     {% if request.GET.success %}
-    <div style="background-color: #e7f5ff; border: 1px solid #74c0fc; padding: 15px; margin-bottom: 20px; border-radius: 5px;">
+    <div class="alert alert-success">
         <strong>Payment received</strong>
         <p>Your payment was completed on Stripe. This page will update once the Stripe webhook confirms the order as PAID.</p>
     </div>
     {% endif %}
 
     {% if request.GET.canceled %}
-    <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; margin-bottom: 20px; border-radius: 5px;">
+    <div class="alert alert-warn">
         <strong>Checkout canceled</strong>
         <p>No payment was completed.</p>
     </div>
     {% endif %}
 
     {% if demo_mode %}
-    <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; margin-bottom: 20px; border-radius: 5px;">
+    <div class="alert alert-warn">
         <strong>⚠️ Demo Mode Active</strong>
         <p>Stripe API keys are not configured. Running in demo mode (fallback) - orders will be marked PAID immediately without Stripe.</p>
         <p><small>To enable real Stripe checkout, set environment variables: STRIPE_PUBLISHABLE_KEY, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET</small></p>
