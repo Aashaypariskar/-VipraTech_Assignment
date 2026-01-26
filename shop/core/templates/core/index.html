@@ -140,21 +140,42 @@
         });
         renderTotal();
         
-        // Optional UX: after Stripe redirect, auto-refresh briefly to pick up webhook-confirmed orders.
-        (function maybeAutoRefreshAfterSuccess() {
+        // After Stripe redirects back, poll the server for webhook-finalized status.
+        // This avoids repeated full-page reload flicker.
+        (function pollForPaidAfterSuccess() {
             if (demoMode || !stripeConfigured) return;
             const params = new URLSearchParams(window.location.search);
             if (!params.has('success')) return;
+            const sessionId = params.get('session_id');
+            if (!sessionId) return;
 
-            const key = 'vipra_success_refresh_count';
-            const count = parseInt(sessionStorage.getItem(key) || '0', 10) + 1;
-            sessionStorage.setItem(key, String(count));
+            let attempts = 0;
+            const maxAttempts = 30; // ~45s @ 1500ms
 
-            if (count >= 6) {
-                sessionStorage.removeItem(key);
-                return;
+            async function tick() {
+                attempts += 1;
+                try {
+                    const resp = await fetch(`/order-status/?session_id=${encodeURIComponent(sessionId)}`, {
+                        headers: { 'Accept': 'application/json' },
+                    });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        if (data.status === 'PAID') {
+                            // Reload once (without query params) so "My Orders" shows the paid order.
+                            window.location.href = '/';
+                            return;
+                        }
+                    }
+                } catch (_) {
+                    // ignore transient errors
+                }
+
+                if (attempts < maxAttempts) {
+                    setTimeout(tick, 1500);
+                }
             }
-            setTimeout(() => window.location.reload(), 2000);
+
+            setTimeout(tick, 800);
         })();
 
         async function checkout() {

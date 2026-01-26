@@ -145,7 +145,7 @@ def create_checkout_session(request):
                 line_items=line_items,
                 mode='payment',
                 # Redirect is NOT used to mark orders paid; webhook is the only source of truth.
-                success_url=request.build_absolute_uri('/') + '?success=1',
+                success_url=request.build_absolute_uri('/') + '?success=1&session_id={CHECKOUT_SESSION_ID}',
                 cancel_url=request.build_absolute_uri('/') + '?canceled=1',
             )
         except stripe.error.AuthenticationError:
@@ -239,3 +239,23 @@ def stripe_webhook(request):
             return JsonResponse({'status': 'success'})
     
     return JsonResponse({'status': 'success'})
+
+
+@require_http_methods(["GET"])
+def order_status(request):
+    """
+    Read-only endpoint used by the frontend after Stripe redirect.
+
+    This does NOT mark anything as PAID; it only reports what the webhook has finalized.
+    """
+    session_id = request.GET.get('session_id', '')
+    if not session_id:
+        return JsonResponse({'error': 'Missing session_id'}, status=400)
+
+    try:
+        order = Order.objects.only('status').get(session_id=session_id)
+    except Order.DoesNotExist:
+        # Session exists at Stripe but order creation could have failed; treat as pending.
+        return JsonResponse({'status': 'PENDING'})
+
+    return JsonResponse({'status': order.status})
