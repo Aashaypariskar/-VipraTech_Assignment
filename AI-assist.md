@@ -2,7 +2,7 @@
 
 ## What AI Was Used
 
-**Model**: Claude Haiku 4.5 (via GitHub Copilot)
+**Model**: GPT-5.2 (via Cursor)
 
 **Role**: Senior Django engineer providing end-to-end implementation of Stripe Checkout integration.
 
@@ -18,15 +18,15 @@
 ### 2. **Views** (`core/views.py`)
 - **index()**: Fetch products, fetch PAID orders, render template with Stripe public key
   - Generated: Complete implementation with prefetch_related optimization
-  - Review: Confirmed STATUS_PAID filter, template variable names
+  - Review: Confirmed it renders exactly 3 products and only PAID orders, and money is rendered as dollars from cents
   
 - **create_checkout_session()**: JSON parsing, product validation, Stripe session creation, Order/OrderItem creation
-  - Generated: Full validation logic (quantity check, product existence), line_items formatting for Stripe API, transaction safety
-  - Review: Verified error handling (400 for missing products, 500 for Stripe errors), atomic Order+OrderItem creation
+  - Generated: Validation of cart for only the 3 fixed products, line_items formatting for Stripe API, atomic Order+OrderItem creation
+  - Review: Verified error handling (400 for invalid cart, 500 for Stripe errors), demo fallback only when keys missing, and no redirect-based state change
   
 - **stripe_webhook()**: Webhook signature verification, event parsing, idempotent status update
-  - Generated: Complete webhook handler with @csrf_exempt, signature verification, idempotency check
-  - Review: Confirmed signature verification uses settings.STRIPE_WEBHOOK_SECRET, early return for STATUS_PAID, 404 if order not found
+  - Generated: Webhook handler with @csrf_exempt, signature verification, idempotency check, atomic row locking with select_for_update()
+  - Review: Confirmed signature verification uses settings.STRIPE_WEBHOOK_SECRET and repeated events are ignored once PAID
 
 ### 3. **URLs** (`core/urls.py`, `shop/urls.py`)
 - **core/urls.py**: Three paths (index, create-checkout-session, stripe/webhook) with app_name='core'
@@ -38,26 +38,22 @@
   - Review: Verified no duplication of admin path
 
 ### 4. **Template** (`core/templates/core/index.html`)
-- **Products Section**: Loop products, display price_cents formatted as $X.XX, quantity input, "Add to Cart" button
-  - Generated: Full product card HTML with proper template syntax
-  - Review: Verified field access (product.name, product.price_cents), onclick handler
+- **Products Section**: Loop exactly 3 products, show quantity inputs, single "Buy" button
+  - Generated: Minimal HTML to match assignment UX ("enter quantities then Buy")
+  - Review: Verified cents→dollars formatting and input clamping (0–99)
   
-- **Cart Section**: Client-side cart management (JavaScript), cart items display, total calculation, "Buy Now" button
-  - Generated: Complete cart state management in JavaScript, renderCart() function, button enable/disable
-  - Review: Verified cart format (productId -> {name, price_cents, quantity}), total calculation in cents then convert to dollars
+- **Checkout Logic**: JavaScript reads quantities, POSTs `/create-checkout-session/`, and redirects with Stripe.js
+  - Generated: Client logic with CSRF header, total calculation, button disable to reduce double-clicks
+  - Review: Verified demo mode behavior only when server lacks Stripe keys
   
 - **Orders Section**: Loop PAID orders, display status, total, created_at, items list
   - Generated: Full order history template with item details
   - Review: Verified order filtering ({% if orders %} shows PAID orders), price formatting
   
-- **Checkout Logic**: JavaScript fetch POST to /create-checkout-session/, Stripe.redirectToCheckout()
-  - Generated: Complete async checkout() function with CSRF token, error handling, button state management
-  - Review: Verified X-CSRFToken header, Stripe.js initialization, error recovery
-
 ### 5. **Seed Command** (`core/management/commands/seed_products.py`)
-- Delete existing products, create exactly 3 products (Laptop $999.99, Mouse $29.99, Keyboard $79.99)
-  - Generated: Full Command class with handle() method, bulk_create(), stdout.write() for feedback
-  - Review: Verified prices in cents (99999, 2999, 7999), count of 3 products, success message
+- Deterministic upsert of exactly 3 products by name; deletes unreferenced extras only
+  - Generated: update_or_create-based seeding and safety around `PROTECT` relationships
+  - Review: Verified it won’t break existing paid orders by deleting referenced products
 
 ### 6. **README.md**
 - **Assumptions**: 6 key assumptions about environment, currency, sessions, payment state, fixed products, API choice
@@ -115,11 +111,11 @@
 
 ### Modifications Made
 
-1. **Template**: Changed price display from `{{ product.price }}` to `{{ product.price_cents|floatformat:2|add:0 }}` for proper currency formatting
-2. **Views**: Added `prefetch_related('items__product')` to optimize queries in index view
-3. **URLs**: Confirmed app_name='core' for reversible URLs in templates/future views
-4. **Seed Command**: Ensured Product.objects.all().delete() before bulk_create() to maintain idempotency
-5. **README**: Structured with headings, code blocks, and visual flow diagram for clarity
+1. **Template**: Simplified UX to “enter quantities then Buy”, fixed cents→dollars display, and made total computation client-side
+2. **Views**: Made order creation and webhook updates atomic; webhook uses row locking and is idempotent
+3. **Settings**: Ensured real Stripe mode is the default whenever keys exist (demo only when keys are missing)
+4. **Seed Command**: Removed unsafe delete-all behavior that could fail due to `PROTECT`
+5. **README**: Updated flow and duplicate-prevention details to match the final implementation
 
 ## Summary
 
@@ -129,3 +125,9 @@ All generated code is **production-ready** for an MVP:
 - Prevents double-charging with layered safeguards
 - Includes comprehensive documentation and setup instructions
 - Clean, readable, interview-grade code with no unnecessary features
+
+## AI Tools Used (in this session)
+
+- Workspace file inspection (read-only)
+- Patch-based edits applied directly to existing files
+- Local command execution for verification (migrations/server checks)

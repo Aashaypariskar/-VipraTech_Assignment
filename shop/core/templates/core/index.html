@@ -24,6 +24,20 @@
 <body>
     <h1>Welcome to the Shop</h1>
     
+    {% if request.GET.success %}
+    <div style="background-color: #e7f5ff; border: 1px solid #74c0fc; padding: 15px; margin-bottom: 20px; border-radius: 5px;">
+        <strong>Payment received</strong>
+        <p>Your payment was completed on Stripe. This page will update once the Stripe webhook confirms the order as PAID.</p>
+    </div>
+    {% endif %}
+
+    {% if request.GET.canceled %}
+    <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; margin-bottom: 20px; border-radius: 5px;">
+        <strong>Checkout canceled</strong>
+        <p>No payment was completed.</p>
+    </div>
+    {% endif %}
+
     {% if demo_mode %}
     <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; margin-bottom: 20px; border-radius: 5px;">
         <strong>⚠️ Demo Mode Active</strong>
@@ -126,6 +140,23 @@
         });
         renderTotal();
         
+        // Optional UX: after Stripe redirect, auto-refresh briefly to pick up webhook-confirmed orders.
+        (function maybeAutoRefreshAfterSuccess() {
+            if (demoMode || !stripeConfigured) return;
+            const params = new URLSearchParams(window.location.search);
+            if (!params.has('success')) return;
+
+            const key = 'vipra_success_refresh_count';
+            const count = parseInt(sessionStorage.getItem(key) || '0', 10) + 1;
+            sessionStorage.setItem(key, String(count));
+
+            if (count >= 6) {
+                sessionStorage.removeItem(key);
+                return;
+            }
+            setTimeout(() => window.location.reload(), 2000);
+        })();
+
         async function checkout() {
             const checkoutButton = document.getElementById('checkout-button');
             checkoutButton.disabled = true;

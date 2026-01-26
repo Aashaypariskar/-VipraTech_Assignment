@@ -144,8 +144,9 @@ def create_checkout_session(request):
                 payment_method_types=['card'],
                 line_items=line_items,
                 mode='payment',
-                success_url=request.build_absolute_uri('/'),
-                cancel_url=request.build_absolute_uri('/'),
+                # Redirect is NOT used to mark orders paid; webhook is the only source of truth.
+                success_url=request.build_absolute_uri('/') + '?success=1',
+                cancel_url=request.build_absolute_uri('/') + '?canceled=1',
             )
         except stripe.error.AuthenticationError:
             return JsonResponse(
