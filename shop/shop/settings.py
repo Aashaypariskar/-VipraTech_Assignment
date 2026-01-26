@@ -140,13 +140,9 @@ STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY', '')
 STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY', '')
 STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
 
-# Auto-detect: if SECRET_KEY exists, use real mode; otherwise use demo mode
+# Auto-detect: Real Stripe mode is the default when keys exist.
 STRIPE_KEY_PRESENT = bool(STRIPE_SECRET_KEY and STRIPE_PUBLISHABLE_KEY)
-STRIPE_DEMO_MODE = not STRIPE_KEY_PRESENT  # Default: Demo mode if keys missing, Real mode if keys present
-
-# Allow explicit override via environment variable (case-insensitive)
-if 'STRIPE_DEMO_MODE' in os.environ:
-    STRIPE_DEMO_MODE = os.environ.get('STRIPE_DEMO_MODE', '').lower() in ('true', '1', 'yes')
+STRIPE_DEMO_MODE = not STRIPE_KEY_PRESENT  # Demo is ONLY a fallback when keys are missing.
 
 # Startup logging (no sensitive data)
 if STRIPE_KEY_PRESENT:

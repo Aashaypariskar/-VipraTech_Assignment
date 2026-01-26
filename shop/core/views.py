@@ -1,24 +1,20 @@
 import json
 import stripe
 import logging
+import uuid
 from django.shortcuts import render
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.db import transaction, IntegrityError
 
 from .models import Product, Order, OrderItem
 
 logger = logging.getLogger(__name__)
 
-# Initialize Stripe API key (only if in real mode with key present)
-if settings.STRIPE_KEY_PRESENT and not settings.STRIPE_DEMO_MODE:
-    stripe.api_key = settings.STRIPE_SECRET_KEY
-    logger.info('Stripe API key initialized for real mode.')
-elif settings.STRIPE_DEMO_MODE or not settings.STRIPE_KEY_PRESENT:
-    stripe.api_key = None
-    logger.info('Running in Demo mode. Stripe API not initialized.')
+# Initialize Stripe API key (real mode when keys exist)
+stripe.api_key = settings.STRIPE_SECRET_KEY if settings.STRIPE_KEY_PRESENT else None
 
 
 @ensure_csrf_cookie
@@ -32,8 +28,16 @@ def index(request):
     3. Render index.html with products and orders
     4. Determine Stripe mode based on key presence
     """
-    products = Product.objects.all()
-    paid_orders = Order.objects.filter(status=Order.STATUS_PAID).prefetch_related('items__product')
+    # Display exactly 3 fixed products (seeded deterministically).
+    products = list(Product.objects.order_by('id')[:3])
+    for p in products:
+        p.price_display = f"{p.price_cents / 100:.2f}"
+
+    paid_orders = list(
+        Order.objects.filter(status=Order.STATUS_PAID).prefetch_related('items__product')
+    )
+    for o in paid_orders:
+        o.total_display = f"{o.total_cents / 100:.2f}"
     
     # Stripe mode is determined by key presence
     stripe_configured = settings.STRIPE_KEY_PRESENT
@@ -73,23 +77,28 @@ def create_checkout_session(request):
         if not items:
             return JsonResponse({'error': 'No items in cart'}, status=400)
         
+        # Allow only the 3 fixed products displayed on the page.
+        allowed_products = list(Product.objects.order_by('id')[:3])
+        allowed_by_id = {p.id: p for p in allowed_products}
+
         # Validate and collect line items for Stripe/demo
         line_items = []
         total_cents = 0
-        order_items_data = []
+        order_items = []
         
         for item in items:
             product_id = item.get('product_id')
             quantity = item.get('quantity', 0)
             
-            # Validate quantity
-            if not isinstance(quantity, int) or quantity <= 0:
+            if not isinstance(product_id, int):
+                return JsonResponse({'error': 'Invalid product_id'}, status=400)
+            if not isinstance(quantity, int) or quantity < 0:
                 return JsonResponse({'error': f'Invalid quantity for product {product_id}'}, status=400)
-            
-            # Fetch product
-            try:
-                product = Product.objects.get(id=product_id)
-            except Product.DoesNotExist:
+            if quantity == 0:
+                continue
+
+            product = allowed_by_id.get(product_id)
+            if product is None:
                 return JsonResponse({'error': f'Product {product_id} not found'}, status=400)
             
             # Calculate cost
@@ -108,34 +117,28 @@ def create_checkout_session(request):
                 'quantity': quantity,
             })
             
-            order_items_data.append({
-                'product': product,
-                'quantity': quantity,
-            })
+            order_items.append((product, quantity))
+
+        if not line_items:
+            return JsonResponse({'error': 'Please select at least one item'}, status=400)
         
         # Check if Stripe is configured based on key presence flag from settings
-        if not settings.STRIPE_KEY_PRESENT or settings.STRIPE_DEMO_MODE:
-            # Demo mode: create order with PAID status (auto-complete for demo)
-            order = Order.objects.create(
-                session_id=f'demo_session_{Order.objects.count() + 1}',
-                status=Order.STATUS_PAID,  # Auto-mark as paid in demo mode
-                total_cents=total_cents,
-            )
-            
-            # Create OrderItems
-            for item_data in order_items_data:
-                OrderItem.objects.create(
-                    order=order,
-                    product=item_data['product'],
-                    quantity=item_data['quantity'],
+        if settings.STRIPE_DEMO_MODE or not settings.STRIPE_KEY_PRESENT:
+            # Demo mode (fallback only): create order as PAID immediately (no Stripe call).
+            demo_session_id = f"demo_{uuid.uuid4().hex}"
+            with transaction.atomic():
+                order = Order.objects.create(
+                    session_id=demo_session_id,
+                    status=Order.STATUS_PAID,
+                    total_cents=total_cents,
                 )
-            
+                OrderItem.objects.bulk_create([
+                    OrderItem(order=order, product=product, quantity=qty)
+                    for (product, qty) in order_items
+                ])
             return JsonResponse({'sessionId': order.session_id, 'demo': True})
-        
-        # Real Stripe mode: Initialize Stripe API with secret key
-        stripe.api_key = settings.STRIPE_SECRET_KEY
-        
-        # Create Stripe checkout session
+
+        # Real Stripe mode: Create Stripe checkout session
         try:
             session = stripe.checkout.Session.create(
                 payment_method_types=['card'],
@@ -145,25 +148,28 @@ def create_checkout_session(request):
                 cancel_url=request.build_absolute_uri('/'),
             )
         except stripe.error.AuthenticationError:
-            return JsonResponse({'error': 'Stripe API Key is invalid. Please configure STRIPE_SECRET_KEY environment variable.'}, status=500)
+            return JsonResponse(
+                {'error': 'Stripe API key is invalid. Please configure STRIPE_SECRET_KEY.'},
+                status=500,
+            )
         except stripe.error.StripeError as e:
             return JsonResponse({'error': f'Stripe error: {str(e)}'}, status=500)
-        
-        # Create Order with PENDING status
-        order = Order.objects.create(
-            session_id=session.id,
-            status=Order.STATUS_PENDING,
-            total_cents=total_cents,
-        )
-        
-        # Create OrderItems
-        for item_data in order_items_data:
-            OrderItem.objects.create(
-                order=order,
-                product=item_data['product'],
-                quantity=item_data['quantity'],
-            )
-        
+
+        # Atomic DB writes: create Order + OrderItems together.
+        try:
+            with transaction.atomic():
+                order = Order.objects.create(
+                    session_id=session.id,
+                    status=Order.STATUS_PENDING,
+                    total_cents=total_cents,
+                )
+                OrderItem.objects.bulk_create([
+                    OrderItem(order=order, product=product, quantity=qty)
+                    for (product, qty) in order_items
+                ])
+        except IntegrityError:
+            return JsonResponse({'error': 'Duplicate checkout session. Please retry.'}, status=409)
+
         return JsonResponse({'sessionId': session.id})
     
     except json.JSONDecodeError:
@@ -195,6 +201,10 @@ def stripe_webhook(request):
     - Idempotent: checking existing PAID status prevents re-processing
     - Webhook only source of truth for payment (never via redirect)
     """
+    if not settings.STRIPE_WEBHOOK_SECRET:
+        logger.error('STRIPE_WEBHOOK_SECRET is not configured.')
+        return JsonResponse({'error': 'Webhook secret not configured'}, status=500)
+
     payload = request.body
     sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
     
@@ -213,18 +223,18 @@ def stripe_webhook(request):
         session_id = session['id']
         
         try:
-            order = Order.objects.get(session_id=session_id)
-            
-            # Idempotent: if already PAID, return 200
-            if order.status == Order.STATUS_PAID:
-                return JsonResponse({'status': 'success'})
-            
-            # Mark order as PAID
-            order.status = Order.STATUS_PAID
-            order.save(update_fields=['status'])
-        
+            with transaction.atomic():
+                order = Order.objects.select_for_update().get(session_id=session_id)
+
+                # Idempotent: if already PAID, return 200
+                if order.status == Order.STATUS_PAID:
+                    return JsonResponse({'status': 'success'})
+
+                order.status = Order.STATUS_PAID
+                order.save(update_fields=['status'])
         except Order.DoesNotExist:
-            # Session ID not found in database
-            return JsonResponse({'error': 'Order not found'}, status=404)
+            # Don't ask Stripe to retry forever; log for investigation.
+            logger.warning('Webhook for unknown session_id=%s', session_id)
+            return JsonResponse({'status': 'success'})
     
     return JsonResponse({'status': 'success'})

@@ -1,6 +1,7 @@
 from django.core.management.base import BaseCommand
+from django.db import transaction
 
-from core.models import Product
+from core.models import Product, OrderItem
 
 
 class Command(BaseCommand):
@@ -17,17 +18,40 @@ class Command(BaseCommand):
         Execute the command to create sample products.
         
         Flow:
-        1. Clear existing products
-        2. Create exactly 3 products with sample data
+        1. Upsert the 3 fixed products deterministically by name
+        2. Delete any extra products only if they are unreferenced
         3. Display confirmation message
         """
-        Product.objects.all().delete()
-        
-        products = [
-            Product(name='Laptop', price_cents=99999),  # $999.99
-            Product(name='Mouse', price_cents=2999),    # $29.99
-            Product(name='Keyboard', price_cents=7999), # $79.99
+        desired = [
+            ('Laptop', 99999),   # $999.99
+            ('Mouse', 2999),     # $29.99
+            ('Keyboard', 7999),  # $79.99
         ]
-        
-        Product.objects.bulk_create(products)
-        self.stdout.write(self.style.SUCCESS(f'Successfully created {len(products)} products'))
+        desired_names = [name for (name, _) in desired]
+
+        with transaction.atomic():
+            created = 0
+            updated = 0
+            for name, price_cents in desired:
+                obj, was_created = Product.objects.update_or_create(
+                    name=name,
+                    defaults={'price_cents': price_cents},
+                )
+                created += 1 if was_created else 0
+                updated += 0 if was_created else 1
+
+            # Keep DB tidy without breaking existing orders:
+            # delete products not in our fixed set only if unreferenced.
+            referenced_ids = OrderItem.objects.values_list('product_id', flat=True).distinct()
+            deleted, _ = (
+                Product.objects
+                .exclude(name__in=desired_names)
+                .exclude(id__in=referenced_ids)
+                .delete()
+            )
+
+        self.stdout.write(
+            self.style.SUCCESS(
+                f'Products seeded. created={created}, updated={updated}, deleted_extra_unreferenced={deleted}'
+            )
+        )

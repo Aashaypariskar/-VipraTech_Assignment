@@ -17,7 +17,8 @@
         .order-card ul { margin: 10px 0; }
         .order-card li { margin: 5px 0; }
         #cart-total { font-size: 18px; font-weight: bold; margin: 10px 0; }
-        .cart-item { display: flex; justify-content: space-between; padding: 10px; border-bottom: 1px solid #eee; }
+        .qty-row { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+        .muted { color: #666; font-size: 12px; }
     </style>
 </head>
 <body>
@@ -26,32 +27,45 @@
     {% if demo_mode %}
     <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; margin-bottom: 20px; border-radius: 5px;">
         <strong>⚠️ Demo Mode Active</strong>
-        <p>Stripe API keys are not configured. Running in demo mode - orders will be automatically completed without payment processing.</p>
+        <p>Stripe API keys are not configured. Running in demo mode (fallback) - orders will be marked PAID immediately without Stripe.</p>
         <p><small>To enable real Stripe checkout, set environment variables: STRIPE_PUBLISHABLE_KEY, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET</small></p>
     </div>
     {% endif %}
     
     <!-- Product list section -->
     <section id="products">
-        <h2>Products</h2>
+        <h2>Products (3 fixed items)</h2>
         {% for product in products %}
             <div class="product-card">
                 <h3>{{ product.name }}</h3>
-                <p><strong>Price:</strong> ${{ product.price_cents|floatformat:2|add:0 }}</p>
-                <input type="number" id="qty-{{ product.id }}" class="quantity-input" data-product-id="{{ product.id }}" data-product-name="{{ product.name }}" data-price-cents="{{ product.price_cents }}" min="1" value="1">
-                <button onclick="addToCart({{ product.id }}, '{{ product.name }}', {{ product.price_cents }})">Add to Cart</button>
+                <p><strong>Price:</strong> ${{ product.price_display }}</p>
+                <div class="qty-row">
+                    <label for="qty-{{ product.id }}"><strong>Quantity</strong></label>
+                    <input
+                        type="number"
+                        id="qty-{{ product.id }}"
+                        class="quantity-input"
+                        data-product-id="{{ product.id }}"
+                        data-price-cents="{{ product.price_cents }}"
+                        min="0"
+                        value="0"
+                    >
+                    <span class="muted">Enter 0–99</span>
+                </div>
             </div>
         {% empty %}
             <p>No products available.</p>
         {% endfor %}
     </section>
     
-    <!-- Cart section -->
-    <section id="cart">
-        <h2>Cart</h2>
-        <div id="cart-items"></div>
+    <!-- Checkout section -->
+    <section id="checkout">
+        <h2>Checkout</h2>
         <div id="cart-total">Total: $0.00</div>
-        <button id="checkout-button" onclick="checkout()" style="display: none;">Buy Now</button>
+        <button id="checkout-button" onclick="checkout()">Buy</button>
+        <div class="muted" style="margin-top: 8px;">
+            Orders are finalized only via Stripe webhook in real mode (never via redirect).
+        </div>
         {% csrf_token %}
     </section>
     
@@ -63,7 +77,7 @@
                 <div class="order-card">
                     <h3>Order #{{ order.id }}</h3>
                     <p><strong>Status:</strong> {{ order.status }}</p>
-                    <p><strong>Total:</strong> ${{ order.total_cents|floatformat:2|add:0 }}</p>
+                    <p><strong>Total:</strong> ${{ order.total_display }}</p>
                     <p><strong>Created:</strong> {{ order.created_at|date:"Y-m-d H:i" }}</p>
                     <h4>Items:</h4>
                     <ul>
@@ -79,82 +93,50 @@
     </section>
     
     <script>
-        const stripe = {% if stripe_configured %}Stripe('{{ stripe_public_key }}'){% else %}null{% endif %};
-        let cart = {};
+        const stripeConfigured = {{ stripe_configured|lower }};
         const demoMode = {{ demo_mode|lower }};
-        
-        function addToCart(productId, productName, priceCents) {
-            const qtyInput = document.getElementById(`qty-${productId}`);
-            const qty = parseInt(qtyInput.value);
-            
-            if (qty <= 0) {
-                alert('Please enter a valid quantity');
-                return;
-            }
-            
-            if (cart[productId]) {
-                cart[productId].quantity += qty;
-            } else {
-                cart[productId] = {
-                    name: productName,
-                    price_cents: priceCents,
-                    quantity: qty,
-                };
-            }
-            
-            qtyInput.value = 1;
-            renderCart();
+        const stripe = stripeConfigured ? Stripe('{{ stripe_public_key }}') : null;
+
+        function clampInt(value, min, max) {
+            const n = parseInt(value, 10);
+            if (Number.isNaN(n)) return min;
+            return Math.max(min, Math.min(max, n));
         }
-        
-        function renderCart() {
-            const cartItemsDiv = document.getElementById('cart-items');
-            const checkoutButton = document.getElementById('checkout-button');
-            const cartTotalDiv = document.getElementById('cart-total');
-            
-            cartItemsDiv.innerHTML = '';
+
+        function computeTotalCents() {
+            const inputs = document.querySelectorAll('.quantity-input');
             let totalCents = 0;
-            let itemCount = 0;
-            
-            for (const [productId, item] of Object.entries(cart)) {
-                const itemTotal = item.price_cents * item.quantity;
-                totalCents += itemTotal;
-                itemCount++;
-                
-                const itemDiv = document.createElement('div');
-                itemDiv.className = 'cart-item';
-                itemDiv.innerHTML = `
-                    <span>${item.name} × ${item.quantity}</span>
-                    <span>$${(itemTotal / 100).toFixed(2)}
-                    <button onclick="removeFromCart(${productId})" style="margin-left: 10px; padding: 5px 10px; background-color: #dc3545;">Remove</button>
-                    </span>
-                `;
-                cartItemsDiv.appendChild(itemDiv);
-            }
-            
-            if (itemCount > 0) {
-                checkoutButton.style.display = 'block';
-                checkoutButton.textContent = demoMode ? 'Complete Order (Demo)' : 'Buy Now';
-                cartTotalDiv.textContent = `Total: $${(totalCents / 100).toFixed(2)}`;
-            } else {
-                checkoutButton.style.display = 'none';
-                cartTotalDiv.textContent = 'Total: $0.00';
-            }
+            inputs.forEach((input) => {
+                const qty = clampInt(input.value, 0, 99);
+                input.value = qty;
+                const priceCents = parseInt(input.dataset.priceCents, 10);
+                totalCents += priceCents * qty;
+            });
+            return totalCents;
         }
-        
-        function removeFromCart(productId) {
-            delete cart[productId];
-            renderCart();
+
+        function renderTotal() {
+            const totalCents = computeTotalCents();
+            document.getElementById('cart-total').textContent = `Total: $${(totalCents / 100).toFixed(2)}`;
         }
+
+        document.querySelectorAll('.quantity-input').forEach((input) => {
+            input.addEventListener('input', renderTotal);
+            input.addEventListener('change', renderTotal);
+        });
+        renderTotal();
         
         async function checkout() {
             const checkoutButton = document.getElementById('checkout-button');
             checkoutButton.disabled = true;
-            checkoutButton.textContent = demoMode ? 'Completing Order...' : 'Processing...';
-            
-            const items = Object.entries(cart).map(([productId, item]) => ({
-                product_id: parseInt(productId),
-                quantity: item.quantity,
-            }));
+            checkoutButton.textContent = demoMode ? 'Completing...' : 'Redirecting...';
+
+            const items = [];
+            document.querySelectorAll('.quantity-input').forEach((input) => {
+                const productId = parseInt(input.dataset.productId, 10);
+                const qty = clampInt(input.value, 0, 99);
+                if (qty > 0) items.push({ product_id: productId, quantity: qty });
+            });
             
             // Get CSRF token
             const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
@@ -173,7 +155,7 @@
                     const errorData = await response.json();
                     alert(`Error: ${errorData.error}`);
                     checkoutButton.disabled = false;
-                    checkoutButton.textContent = demoMode ? 'Complete Order (Demo)' : 'Buy Now';
+                    checkoutButton.textContent = 'Buy';
                     return;
                 }
                 
@@ -181,42 +163,30 @@
                 
                 if (demoMode || data.demo) {
                     // Demo mode: auto-complete the order
-                    alert('Order completed successfully! (Demo Mode)\n\nThe order has been added to "My Orders" section.');
-                    cart = {};
-                    renderCart();
+                    alert('Order completed successfully! (Demo Mode)\n\nThe order has been added to "My Orders".');
+                    document.querySelectorAll('.quantity-input').forEach((i) => (i.value = 0));
+                    renderTotal();
                     setTimeout(() => location.reload(), 1500);
                     return;
                 }
                 
                 // Real Stripe mode
                 const { sessionId } = data;
+                if (!stripe) {
+                    throw new Error('Stripe is not configured on this server.');
+                }
                 const { error } = await stripe.redirectToCheckout({ sessionId });
                 
                 if (error) {
                     alert(`Error: ${error.message}`);
                     checkoutButton.disabled = false;
-                    checkoutButton.textContent = 'Buy Now';
+                    checkoutButton.textContent = 'Buy';
                 }
             } catch (err) {
                 alert(`Error: ${err.message}`);
                 checkoutButton.disabled = false;
-                checkoutButton.textContent = demoMode ? 'Complete Order (Demo)' : 'Buy Now';
+                checkoutButton.textContent = 'Buy';
             }
-        }
-        
-        function getCookie(name) {
-            let cookieValue = null;
-            if (document.cookie && document.cookie !== '') {
-                const cookies = document.cookie.split(';');
-                for (let i = 0; i < cookies.length; i++) {
-                    const cookie = cookies[i].trim();
-                    if (cookie.substring(0, name.length + 1) === name + '=') {
-                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-                        break;
-                    }
-                }
-            }
-            return cookieValue;
         }
     </script>
 </body>
