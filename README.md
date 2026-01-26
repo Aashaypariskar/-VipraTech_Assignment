@@ -1,10 +1,8 @@
-#  VipraTech_Assignment - Stripe Checkout Django Shop
+# VipraTech_Assignment - Stripe Checkout Django Shop
 
-A production-ready Django e-commerce application with Stripe Checkout integration. The app allows customers to browse products, add them to a cart, and securely purchase using Stripe's Checkout Session API.
+A minimal, interview-grade Django app that implements a **Stripe Checkout Session** payment flow with **webhook-only** order finalization.
 
 ## Assumptions
-
-**⚠️ IMPORTANT FOR WINDOWS USERS:** See [WINDOWS_STRIPE_SETUP.md](WINDOWS_STRIPE_SETUP.md) for the correct procedure to set Stripe keys. TL;DR: Run `setx`, then open a **NEW PowerShell window**, then verify and restart Django.
 
 1. **Environment Setup**: Stripe API keys (publishable and secret) are configured as environment variables (`STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`).
 2. **Currency**: All prices are stored in cents (USD) to avoid floating-point precision issues.
@@ -79,16 +77,14 @@ When you set `STRIPE_PUBLISHABLE_KEY` and `STRIPE_SECRET_KEY`, the app automatic
 5. Checkout button now uses real Stripe Checkout Session API
 6. Only webhooks can mark orders as PAID (not manual redirects)
 
-1. Customer adds products to cart (client-side cart management)
-2. Clicks "Buy" button
-3. Frontend POSTs `/create-checkout-session/` with `{items: [{product_id, quantity}]}` (only the 3 fixed products)
-4. Server validates items, computes total, calls Stripe to create a Checkout Session
-5. Server performs an **atomic DB transaction** creating `Order(status=PENDING, session_id=<stripe_session_id>, total_cents=...)` and `OrderItem` rows
-6. Frontend redirects to Stripe Checkout using the session id
-7. Customer pays at Stripe
-8. Stripe sends `checkout.session.completed` webhook
-9. Server verifies signature, locks the `Order` row (`select_for_update()`), and marks it `PAID` if not already paid
-10. Customer refreshes/returns and sees the PAID order in "My Orders"
+1. Customer enters quantities and clicks **Buy**
+2. Frontend POSTs `/create-checkout-session/` with `{items: [{product_id, quantity}]}` (only the 3 fixed products)
+3. Server validates items, computes total, creates Stripe Checkout Session
+4. Server performs an **atomic DB transaction** creating `Order(status=PENDING, session_id=<stripe_session_id>, total_cents=...)` and `OrderItem` rows
+5. Frontend redirects to Stripe Checkout
+6. Stripe sends `checkout.session.completed` webhook
+7. Server verifies signature and marks the `Order` **PAID** (idempotent + row locked)
+8. Home page shows the order in **My Orders** (PAID only)
 
 ## How Duplicate Charges Are Prevented
 
@@ -110,47 +106,64 @@ When you set `STRIPE_PUBLISHABLE_KEY` and `STRIPE_SECRET_KEY`, the app automatic
 
 ## Setup & Run
 
+### Windows note (important)
+
+On Windows, if you set env vars with `setx`, they **do not apply to the current PowerShell window**. After running `setx ...`, you must open a **new PowerShell** window before starting Django.
+
 ### Prerequisites
 
 - Python 3.8+
 - Django 4.2+
 - Stripe API account (test mode keys)
 - `pip` package manager
+- Stripe CLI (for local webhook testing)
 
 ### Installation
 
-```bash
-# 1. Clone the repository
-cd d:\-VipraTech_Assignment\shop
+```powershell
+# 1) Go to the Django project
+cd "d:\-VipraTech_Assignment\shop"
 
-# 2. Create a virtual environment
+# 2) (Optional) Create + activate venv
 python -m venv venv
-venv\Scripts\activate  # On Windows
+.\venv\Scripts\Activate.ps1
 
-# 3. Install dependencies
+# 3) Install dependencies
 pip install django stripe
 
-# 4. Configure environment variables
-# Create a .env file or set OS environment variables:
-# STRIPE_PUBLISHABLE_KEY=pk_test_...
-# STRIPE_SECRET_KEY=sk_test_...
-# STRIPE_WEBHOOK_SECRET=whsec_...
-
-# 5. Run migrations
+# 4) Apply migrations + seed the 3 fixed products
 python manage.py migrate
-
-# 6. Seed products
 python manage.py seed_products
+```
 
-# 7. Start development server
-python manage.py runserver
+### Configure Stripe keys (Windows PowerShell)
+
+Persist keys (recommended):
+
+```powershell
+setx STRIPE_PUBLISHABLE_KEY "pk_test_..."
+setx STRIPE_SECRET_KEY "sk_test_..."
+```
+
+Then **close PowerShell** and open a **new** PowerShell window and verify:
+
+```powershell
+echo $env:STRIPE_PUBLISHABLE_KEY
+echo $env:STRIPE_SECRET_KEY
 ```
 
 ### Testing the App
 
-1. Open http://localhost:8000/
+1. Start the server:
+
+```powershell
+cd "d:\-VipraTech_Assignment\shop"
+python manage.py runserver
+```
+
+2. Open `http://localhost:8000/`
 2. See 3 products: Laptop ($999.99), Mouse ($29.99), Keyboard ($79.99)
-3. Add items to cart, click "Buy Now"
+3. Enter quantities and click **Buy**
 4. Enter Stripe test card: 4242 4242 4242 4242 (exp: 12/34, CVC: 123)
 5. On success redirect, check "My Orders" section (shows only PAID orders)
 
@@ -158,16 +171,32 @@ python manage.py runserver
 
 For local testing with Stripe webhooks:
 
-```bash
-# Install Stripe CLI
-# https://stripe.com/docs/stripe-cli
+1. In one terminal, start Django:
 
-stripe listen --forward-to localhost:8000/stripe/webhook/
-# Get webhook signing secret from CLI output
-export STRIPE_WEBHOOK_SECRET=whsec_...
-
+```powershell
+cd "d:\-VipraTech_Assignment\shop"
 python manage.py runserver
 ```
+
+2. In a second terminal, run Stripe CLI:
+
+```powershell
+stripe listen --forward-to http://localhost:8000/stripe/webhook/
+```
+
+3. Copy the `whsec_...` printed by Stripe CLI and set it:
+
+```powershell
+setx STRIPE_WEBHOOK_SECRET "whsec_..."
+```
+
+4. Open a **new** PowerShell and verify:
+
+```powershell
+echo $env:STRIPE_WEBHOOK_SECRET
+```
+
+5. Restart Django after setting the webhook secret.
 
 ## Code Quality Notes
 

@@ -6,15 +6,27 @@
     <title>Shop</title>
     <script src="https://js.stripe.com/v3/"></script>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #ffffff; color: #111111; }
+        body { font-family: Arial, sans-serif; margin: 0; background: #ffffff; color: #111111; }
         p { color: #111111; }
-        .product-card { border: 1px solid #ccc; padding: 15px; margin: 10px 0; border-radius: 5px; }
+
+        .container { max-width: 980px; margin: 0 auto; padding: 24px 16px 56px; }
+        .section { margin-top: 28px; }
+        .section h2 { margin: 0 0 12px; }
+        h1 { margin: 0 0 12px; }
+
+        .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+        @media (min-width: 800px) {
+            .grid { grid-template-columns: 1fr 1fr; }
+        }
+
+        .card { border: 1px solid #e5e7eb; background: #ffffff; padding: 16px; border-radius: 10px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+        .product-card { border: 1px solid #e5e7eb; padding: 16px; margin: 0; border-radius: 10px; background: #ffffff; }
         .product-card h3 { margin-top: 0; }
         input[type="number"] { width: 60px; padding: 5px; }
         button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
         button:disabled { background-color: #ccc; cursor: not-allowed; }
-        .order-card { border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; background-color: #f9f9f9; }
-        .order-card h3 { margin-top: 0; color: #333; }
+        .order-card { border: 1px solid #e5e7eb; padding: 16px; margin: 0; border-radius: 10px; background-color: #ffffff; }
+        .order-card h3 { margin: 0 0 6px; color: #111111; }
         .order-card p, .order-card li { color: #111111; }
         .order-card ul { margin: 10px 0; }
         .order-card li { margin: 5px 0; }
@@ -22,13 +34,17 @@
         .qty-row { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
         .muted { color: #666; font-size: 12px; }
 
-        .alert { padding: 15px; margin-bottom: 20px; border-radius: 5px; color: #111111; }
+        .alert { padding: 14px 14px; margin: 0 0 12px; border-radius: 10px; color: #111111; }
         .alert p { margin: 8px 0 0 0; color: #111111; }
         .alert-success { background-color: #e7f5ff; border: 1px solid #74c0fc; }
         .alert-warn { background-color: #fff3cd; border: 1px solid #ffc107; }
+
+        .checkout-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        .checkout-row button { min-width: 120px; }
     </style>
 </head>
 <body>
+    <div class="container">
     <h1>Welcome to the Shop</h1>
     
     {% if request.GET.success %}
@@ -54,8 +70,9 @@
     {% endif %}
     
     <!-- Product list section -->
-    <section id="products">
+    <section id="products" class="section">
         <h2>Products (3 fixed items)</h2>
+        <div class="grid">
         {% for product in products %}
             <div class="product-card">
                 <h3>{{ product.name }}</h3>
@@ -77,23 +94,29 @@
         {% empty %}
             <p>No products available.</p>
         {% endfor %}
+        </div>
     </section>
     
     <!-- Checkout section -->
-    <section id="checkout">
+    <section id="checkout" class="section">
         <h2>Checkout</h2>
-        <div id="cart-total">Total: $0.00</div>
-        <button id="checkout-button" onclick="checkout()">Buy</button>
-        <div class="muted" style="margin-top: 8px;">
-            Orders are finalized only via Stripe webhook in real mode (never via redirect).
+        <div class="card">
+            <div class="checkout-row">
+                <div id="cart-total">Total: $0.00</div>
+                <button id="checkout-button" onclick="checkout()">Buy</button>
+            </div>
+            <div class="muted" style="margin-top: 8px;">
+                Orders are finalized only via Stripe webhook in real mode (never via redirect).
+            </div>
+            {% csrf_token %}
         </div>
-        {% csrf_token %}
     </section>
     
     <!-- Orders history section -->
-    <section id="orders">
+    <section id="orders" class="section">
         <h2>My Orders</h2>
         {% if orders %}
+            <div class="grid">
             {% for order in orders %}
                 <div class="order-card">
                     <h3>Order #{{ order.id }}</h3>
@@ -108,6 +131,7 @@
                     </ul>
                 </div>
             {% endfor %}
+            </div>
         {% else %}
             <p>No orders yet.</p>
         {% endif %}
@@ -248,5 +272,6 @@
             }
         }
     </script>
+</div>
 </body>
 </html>
